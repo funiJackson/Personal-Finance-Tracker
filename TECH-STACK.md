@@ -1,14 +1,15 @@
-# 技术栈
+# Tech stack
 
-记账 App 的技术选型说明。目录对应关系：`web/` 前端、`api/` 识别服务、`supabase/` 数据库。
+Implementation notes for the expense tracker. Directories map to tiers: `web/` frontend,
+`api/` extraction service, `supabase/` database.
 
-整体是一个**双后端**结构 —— 这是理解这个项目最关键的一点：
+The structure is a **split backend**, and that is the thing to understand first:
 
 ```
                     ┌──────────────────────────────┐
-                    │  web/  React SPA (浏览器)    │
+                    │   web/  React SPA (browser)  │
                     └───────┬──────────────┬───────┘
-       POST 图片（仅识别）  │              │  增删改查 + 传图（直连）
+    POST image (recognize)  │              │  CRUD + uploads (direct)
                     ┌───────▼──────┐  ┌────▼─────────────────┐
                     │ api/ FastAPI │  │ Supabase             │
                     │      ↓       │  │  Postgres + Storage  │
@@ -16,89 +17,100 @@
                     └──────────────┘  └──────────────────────┘
 ```
 
-FastAPI 只负责「把一张小票图片变成结构化字段」，**从不碰数据库**。账目数据由前端
-用 anon key 直连 Supabase 读写，RLS 是真正的权限边界。
+FastAPI does one job — turn a receipt photo into structured fields — and **never touches
+the database**. Ledger data goes straight from the browser to Supabase on the anon key;
+RLS is the real boundary.
 
 ---
 
-## 1. 数据库：Supabase（托管 PostgreSQL）
+## 1. Database: Supabase (hosted PostgreSQL)
 
-全部定义在 `supabase/schema.sql`，文件是幂等的，改完整份重跑即可。
+Everything is defined in `supabase/schema.sql`. The file is idempotent — after any
+change, re-run the whole thing.
 
-### 表结构
+### Tables
 
-| 表 | 说明 |
+| Table | Purpose |
 | --- | --- |
-| `public.receipts` | 一条账目。`uuid` 主键、`numeric(12,2)` 金额、`date` 交易日期 |
-| `public.receipt_items` | 小票明细行，`on delete cascade` 跟随主表删除 |
+| `public.receipts` | One expense. `uuid` primary key, `numeric(12,2)` amount, `date` transaction date |
+| `public.receipt_items` | Line items, removed with the parent via `on delete cascade` |
 
-几个值得注意的字段：
+Four columns carry a decision worth knowing about:
 
-- **`currency`** —— 本位币是 USD。模型从外币小票识别出的原始币种也照实存，但**不做汇率折算**；汇总时只累加本位币，其余币种单独列出。
-- **`image_path`** —— 存的是 Supabase Storage 里的**对象路径**（如 `2026/07/uuid.jpg`），不是 URL。bucket 是私有的、签名 URL 会过期，所以展示时才用 `createSignedUrl()` 现算。手动记账为 `null`。
-- **`user_id`** —— 外键指向 `auth.users`，但 MVP 单用户阶段**恒为 null**。接 Auth 后改成 `not null` 并由 RLS 填充，表结构不用动。
-- **`category`** —— 存 slug（`food` / `transport` …）。标签、图标、颜色只活在 `web/src/constants/categories.ts`，所以 UI 从中文切英文时一行数据都没改。
+- **`currency`** — the base currency is USD. A foreign-currency receipt records its
+  original currency faithfully, but **no FX conversion is applied**; totals sum the base
+  currency only, and other currencies are listed separately.
+- **`image_path`** — stores the Supabase Storage **object path** (`2026/07/uuid.jpg`),
+  not a URL. The bucket is private and signed URLs expire, so `createSignedUrl()` mints
+  one at display time. `null` for manual entries.
+- **`user_id`** — a foreign key to `auth.users`, but always `null` in the single-user
+  MVP. Wiring up Auth makes it `not null` and has RLS populate it; no table change.
+- **`category`** — stores a slug (`food`, `transport`, …). Labels, icons and colours
+  live only in `web/src/constants/categories.ts`, which is why the UI switched from
+  Chinese to English without a single stored row changing.
 
-### 索引
+### Indexes
 
 ```sql
-receipts (date desc)          -- 列表页永远按日期倒序，最热的查询路径
+receipts (date desc)          -- the list view is always date-descending; hottest path
 receipts (category)
 receipts (user_id)
 receipt_items (receipt_id)
 ```
 
-### 触发器
+### Trigger
 
-`set_updated_at()` + `before update` 触发器自动维护 `receipts.updated_at`。
+`set_updated_at()` on a `before update` trigger maintains `receipts.updated_at`.
 
 ### Row Level Security
 
-两张表都 `enable row level security`，但当前策略是 `mvp_anon_all` ——
-**任何持有 anon key 的人都能读写全部数据**，只适用于本地开发 / 个人自用。
+Both tables have `enable row level security`, but the current policy is `mvp_anon_all` —
+**anyone holding the anon key can read and write everything.** That is fine for local
+development and personal use, and nothing else.
 
-接入 Supabase Auth 时，删掉这两条策略，换成 `schema.sql` 第 4 节里已经写好的
-按 `user_id` 隔离的版本即可。
+When wiring up Supabase Auth, drop those two policies and swap in the per-`user_id`
+versions already written out in section 4 of `schema.sql`.
 
 ### Storage
 
-私有 bucket `receipts`：
+Private bucket `receipts`:
 
-| 配置 | 值 |
+| Setting | Value |
 | --- | --- |
 | public | `false` |
-| 大小上限 | 10 MB |
-| 允许类型 | `image/jpeg` `image/png` `image/webp` `image/heic` |
+| Size limit | 10 MB |
+| Allowed types | `image/jpeg` `image/png` `image/webp` `image/heic` |
 
 ---
 
-## 2. 前端：React 19 + TypeScript + Vite
+## 2. Frontend: React 19 + TypeScript + Vite
 
-| 类别 | 选型 | 版本 |
+| Role | Choice | Version |
 | --- | --- | --- |
-| 框架 | React + React DOM | ^19.2 |
-| 语言 | TypeScript | ~6.0 |
-| 构建 | Vite + `@vitejs/plugin-react` | ^8.1 / ^6.0 |
-| 样式 | Tailwind CSS（`@tailwindcss/vite` 插件） | ^4.3 |
-| 路由 | React Router | ^7.18 |
-| 状态 | Zustand | ^5.0 |
-| 图表 | Recharts | ^3.10 |
-| 图标 | lucide-react | ^1.27 |
-| 数据层 | `@supabase/supabase-js` | ^2.110 |
+| Framework | React + React DOM | ^19.2 |
+| Language | TypeScript | ~6.0 |
+| Build | Vite + `@vitejs/plugin-react` | ^8.1 / ^6.0 |
+| Styling | Tailwind CSS (`@tailwindcss/vite` plugin) | ^4.3 |
+| Routing | React Router | ^7.18 |
+| State | Zustand | ^5.0 |
+| Charts | Recharts | ^3.10 |
+| Icons | lucide-react | ^1.27 |
+| Data | `@supabase/supabase-js` | ^2.110 |
 | Lint | oxlint | ^1.71 |
 
-开发用 Node v22。
+Developed against Node v22.
 
-### 样式系统
+### Styling
 
-Tailwind 4 的 CSS-first 配置，没有 `tailwind.config.js`。`web/src/index.css` 里
-`:root` 定义语义令牌（`--bg` / `--surface` / `--fg` / `--muted` / `--line` …），
-暗色模式下整体翻转，再用 `@theme inline` 注册成 Tailwind 工具类
-（`bg-surface`、`text-muted`、`border-line`）。
+Tailwind 4's CSS-first configuration — there is no `tailwind.config.js`. Semantic tokens
+are declared on `:root` in `web/src/index.css` (`--bg`, `--surface`, `--fg`, `--muted`,
+`--line`, …), flipped wholesale in dark mode, then registered as Tailwind utilities via
+`@theme inline` (`bg-surface`, `text-muted`, `border-line`).
 
-组件里只用语义名、不出现裸色值 —— 换配色只动 `index.css` 这一个文件。
+Components use only the semantic names; no raw colour values appear outside that file,
+so a re-skin touches one file.
 
-### 目录结构
+### Layout
 
 ```
 web/src/
@@ -108,70 +120,84 @@ web/src/
 │   ├── form/     AmountField · CategoryGrid · FormRow · ItemsEditor
 │   ├── insights/ CategoryDonut · TrendBars · InsightCards
 │   └── ui/       Sheet
-├── store/        receipts.ts（Zustand）
+├── store/        receipts.ts (Zustand)
 ├── lib/          supabase · receipts · api · analytics · advice · format · image · color
 ├── constants/    categories.ts
 └── types/
 ```
 
-路由（`App.tsx`）：`/` `/list` `/insights` 三个 tab 走 `AppShell`（带底部导航）；
-`/new` `/receipt/:id` `/scan` 是全屏页，不套壳。
+Routes (`App.tsx`): `/`, `/list` and `/insights` are tabs rendered inside `AppShell`
+with the bottom navigation; `/new`, `/receipt/:id` and `/scan` are full-screen and skip
+the shell.
 
-### 两个设计决定
+### Two decisions
 
-**洞察全部是确定性规则算出来的**，不经过模型。`lib/advice.ts` 里每条规则要么给出
-一个有数字支撑、用户能照着去账本里核对的结论，要么什么都不给 —— 模型编一个
-「你餐饮涨了 43%」出来，比不给建议糟糕得多。一次最多显示 4 条。
+**The analysis is computed in the browser, from pure functions.** `lib/analytics.ts` and
+`lib/advice.ts` take the array of receipts already in the store — no extra queries. A few
+hundred rows a year is faster to aggregate in memory than to round-trip, and it removes a
+cache-invalidation problem. No LLM is involved in any conclusion: every insight is a
+deterministic rule with a stated threshold, so a user can check it against their own
+ledger. At most four are shown at once.
 
-**Supabase 客户端不会在配置缺失时崩掉。** `lib/supabase.ts` 里缺 env 就退回占位
-URL，由首页「Connection」面板的状态点把问题讲清楚，而不是模块加载时抛错白屏。
-
----
-
-## 3. 识别服务：Python FastAPI
-
-| 依赖 | 版本 | 用途 |
-| --- | --- | --- |
-| fastapi | 0.118.0 | HTTP 框架 |
-| uvicorn[standard] | 0.37.0 | ASGI 服务器 |
-| openai | 2.49.0 | 调 `gpt-4o` 读图 |
-| pydantic-settings | 2.11.0 | 从 `api/.env` 读配置 |
-| python-multipart | 0.0.20 | 接收上传的图片 |
-| pillow | 11.3.0 | 图片缩放 / EXIF 方向校正 |
-| pillow-heif | 1.1.0 | 认 iPhone 相册的 HEIC |
-
-开发用 Python 3.13。
-
-### 端点
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| `GET` | `/health` | 健康检查，前端的连接状态点靠它 |
-| `POST` | `/api/recognize` | 上传一张小票图，返回结构化字段 |
-
-没配 `OPENAI_API_KEY` 时 `/api/recognize` 返回 503，手动记账不受影响。
-
-### 分层
-
-- `vision.py` —— **厂商相关的东西只出现在这里**。换模型改这一个文件就够了。
-- `schemas.py` —— 纯契约。注意 `ExtractedReceipt` 的 docstring 和每个
-  `Field(description=...)` 都会被折进发给模型的 `response_format`，**它们是 prompt，
-  不是注释**；实现备注要写在 `#` 注释里。
-- `main.py` —— 只管 HTTP 和 CORS。
-- `config.py` —— `OPENAI_API_KEY` 等服务端机密，绝不下发到前端。
-
-送模型前先把图压到长边 1600px、JPEG 质量 85。小票是窄长条，这个尺寸足够看清字，
-再大只是多烧 token、多等几秒。
+**The Supabase client does not crash on missing configuration.** `lib/supabase.ts` falls
+back to a placeholder URL when the environment variables are absent, and the "Connection"
+panel on the home screen explains the problem — rather than `createClient` throwing at
+module load and blanking the app.
 
 ---
 
-## 4. 一次扫描走完的路径
+## 3. Extraction service: Python FastAPI
 
-1. 浏览器里选/拍照 → 前端先降采样（`lib/image.ts`）
-2. `POST /api/recognize` → FastAPI 转 JPEG、压到 1600px → gpt-4o
-3. 返回结构化字段 → **进表单给人看一眼**
-4. 用户确认 → 前端把**原图**传进 Storage
-5. 前端直连 Supabase 写 `receipts` + `receipt_items`
+| Dependency | Version | Role |
+| --- | --- | --- |
+| fastapi | 0.118.0 | HTTP framework |
+| uvicorn[standard] | 0.37.0 | ASGI server |
+| openai | 2.49.0 | Calls `gpt-4o` to read the image |
+| pydantic-settings | 2.11.0 | Reads config from `api/.env` |
+| python-multipart | 0.0.20 | Receives the uploaded image |
+| pillow | 11.3.0 | Resizing and EXIF orientation |
+| pillow-heif | 1.1.0 | Reads the HEIC files an iPhone produces |
 
-第 3 步不能省。模型误读一个总金额会悄悄污染整个账本，而扫一眼几乎不花什么成本。
-整条链路里后端一次都没有碰过数据库。
+Developed against Python 3.13.
+
+### Endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Health check, behind the frontend's connection indicator |
+| `POST` | `/api/recognize` | Upload one receipt image, get structured fields back |
+
+Without `OPENAI_API_KEY`, `/api/recognize` returns 503. Manual entry is unaffected.
+
+### Layers
+
+- **`vision.py`** — the only file that knows which vendor is in use. Changing models
+  means changing this one file.
+- **`schemas.py`** — the contract. Note that the `ExtractedReceipt` docstring and every
+  `Field(description=...)` are folded into the `response_format` sent to the model:
+  **they are prompt, not comments.** Implementation notes belong in `#` comments.
+  `normalize()` lives here too, turning the model's sentinel values back into real nulls
+  and rejecting impossible ones (non-positive amounts, dates like `2026-02-30`, currency
+  codes that aren't three letters).
+- **`main.py`** — HTTP and CORS only.
+- **`config.py`** — server-side secrets such as `OPENAI_API_KEY`, never shipped to the
+  browser.
+
+Images are resized to a 1600px long edge at JPEG quality 85 before being sent. Receipts
+are narrow strips; that is enough to read the print, and anything larger only burns
+tokens and adds seconds.
+
+---
+
+## 4. One scan, end to end
+
+1. Photo picked or taken in the browser → downscaled client-side (`lib/image.ts`)
+2. `POST /api/recognize` → FastAPI converts to JPEG, fixes orientation, resizes to
+   1600px → `gpt-4o`
+3. Structured fields come back → **shown in a form for a human to check**
+4. On confirmation, the frontend uploads the **original** image to Storage
+5. The frontend writes `receipts` + `receipt_items` directly to Supabase
+
+Step 3 is not optional. A misread total silently corrupts the ledger and every metric
+downstream inherits it, whereas glancing at four fields costs almost nothing. Note that
+across the whole chain, the backend never touches the database.
