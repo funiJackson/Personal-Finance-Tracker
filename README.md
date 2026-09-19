@@ -1,5 +1,3 @@
-# Asian-Party
-
 This repository holds two things:
 
 - **A receipt image dataset** — `receipt-image-dataset-1` to `-4`, 188 photos of real receipts
