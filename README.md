@@ -269,20 +269,4 @@ needed:
 
 The backend also has to be started with `--host 0.0.0.0` to be reachable from the phone.
 
----
-
-# 5. Known limitations
-
-- **Extraction accuracy is unmeasured beyond n=5**, and those five share one receipt
-  type. See section 2.
-- **No FX conversion**, so a month containing foreign receipts reports an understated
-  total. It is flagged in the UI rather than silently corrected.
-- **Category assignment comes from the model** and is accepted or corrected by hand at
-  entry. There is no measurement of how often it needs correcting, which would be the
-  first thing worth instrumenting.
-- **Insight thresholds are reasoned, not fitted.** ±8%, 10%, ±6%, 3× — each has an
-  argument behind it in the table above, but none has been tuned against outcomes,
-  because that needs more months of data than this ledger has.
-- **RLS is enabled but the MVP policy lets any anon key holder read and write
-  everything.** Section 4 of `supabase/schema.sql` already contains the per-`user_id`
-  policies to swap in; no table changes are required.
+--
