@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Expenses — Snap a receipt, get your ledger</title>
+
+<!-- Switzer = Neue Haas Grotesk 的开源近亲，瑞士国际主义风格的骨架字。
+     IBM Plex Mono 只用在编号和标签上，做节奏对比。 -->
+<link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=switzer@400,500,600,700&display=swap">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+/* ===========================================================================
+   主题变量 —— 换配色/字体只动这一块
+   Swiss Modern：白底、黑字、一支红。红只用于大字和线；小号红字换深一档，
+   保证白底 4.5:1。
+   =========================================================================== */
+:root {
+    --paper:      #ffffff;
+    --ink:        #111111;
+    --ink-soft:   #6a6a6a;
+    --rule:       #d8d8d8;
+    --accent:     #e8402a;
+    --accent-ink: #c22e1c;
+
+    --font-sans: 'Switzer', -apple-system, 'Helvetica Neue', Arial, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+    /* 全部 clamp()，任何视口都装得下 */
+    --title-size:  clamp(1.7rem, 5.2vw, 4.4rem);
+    --lead-size:   clamp(0.85rem, 1.5vw, 1.2rem);
+    --body-size:   clamp(0.75rem, 1.1vw, 0.97rem);
+    --small-size:  clamp(0.6rem, 0.82vw, 0.78rem);
+    --num-size:    clamp(1.4rem, 3.1vw, 2.7rem);
+
+    --slide-padding: clamp(1rem, 4vw, 4.5rem);
+    --content-gap:   clamp(0.6rem, 2vh, 1.9rem);
+
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { height: 100%; scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+body {
+    height: 100%;
+    overflow-x: hidden;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+}
+
+/* --------------------------------------------------------------------------
+   每屏恰好一个视口高，任何情况下都不滚动
+   -------------------------------------------------------------------------- */
+.slide {
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    scroll-snap-align: start;
+    display: flex;
+    flex-direction: column;
+    padding: var(--slide-padding);
+    position: relative;
+}
+.slide-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: var(--content-gap);
+    max-height: 100%;
+    overflow: hidden;
+    max-width: 1500px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+.slide-head {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: clamp(0.7rem, 2vw, 1.6rem);
+    font-family: var(--font-mono);
+    font-size: var(--small-size);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    padding-bottom: clamp(0.35rem, 0.9vh, 0.75rem);
+    border-bottom: 1px solid var(--ink);
+    max-width: 1500px;
+    width: 100%;
+    margin: 0 auto;
+    flex-shrink: 0;
+}
+.slide-head .idx { color: var(--accent-ink); font-weight: 500; }
+.slide-head .spacer { flex: 1; }
+/* 进入时从左向右画出的红线 */
+.slide-head::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: -1px;
+    height: 2px;
+    background: var(--accent);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.7s var(--ease);
+}
+.slide.visible .slide-head::after { transform: scaleX(1); }
+
+.slide-foot {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    font-family: var(--font-mono);
+    font-size: var(--small-size);
+    color: var(--ink-soft);
+    padding-top: clamp(0.35rem, 0.9vh, 0.75rem);
+    border-top: 1px solid var(--rule);
+    max-width: 1500px;
+    width: 100%;
+    margin: 0 auto;
+    flex-shrink: 0;
+}
+
+h1 {
+    font-size: var(--title-size);
+    font-weight: 600;
+    line-height: 0.96;
+    letter-spacing: -0.035em;
+}
+h1 em { font-style: normal; color: var(--accent); }
+.lead {
+    font-size: var(--lead-size);
+    line-height: 1.35;
+    max-width: 40ch;
+    color: var(--ink-soft);
+}
+
+/* --------------------------------------------------------------------------
+   App 截图
+   截图本身是浅色 UI，直接放在白底上会「飘」，所以给一道细边和一层浅阴影
+   把它钉在页面上。
+   -------------------------------------------------------------------------- */
+.shot {
+    display: block;
+    max-width: 100%;
+    max-height: min(52vh, 460px);
+    width: auto;
+    object-fit: contain;
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px -18px rgba(17, 17, 17, 0.45);
+    background: #f4f6f8;
+}
+
+/* 第 1 页：左文右图 */
+.hero {
+    display: grid;
+    grid-template-columns: 1.05fr 0.95fr;
+    gap: clamp(1rem, 3.5vw, 3.5rem);
+    align-items: center;
+}
+.hero-figs { display: flex; gap: clamp(0.5rem, 1.5vw, 1.25rem); justify-content: flex-end; }
+.hero-figs .shot { max-height: min(56vh, 500px); }
+
+/* 第 2 页：三图一排，每图配一句 */
+.steps {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: clamp(0.6rem, 2vw, 2.25rem);
+    align-items: start;
+}
+.step-fig { display: flex; flex-direction: column; gap: clamp(0.35rem, 1vh, 0.7rem); align-items: center; }
+.step-fig .shot { max-height: min(50vh, 460px); }
+.step-cap { text-align: left; width: 100%; }
+.step-cap .k {
+    font-family: var(--font-mono);
+    font-size: var(--small-size);
+    color: var(--accent-ink);
+    display: block;
+    letter-spacing: 0.06em;
+}
+.step-cap .t {
+    font-size: var(--body-size);
+    font-weight: 600;
+    display: block;
+    line-height: 1.25;
+    margin-top: 0.15em;
+}
+.step-cap .d {
+    font-size: var(--small-size);
+    color: var(--ink-soft);
+    display: block;
+    line-height: 1.4;
+    margin-top: 0.2em;
+}
+
+/* 第 3 页：技术栈三栏 + 数字条 */
+.stack {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+    gap: clamp(0.7rem, 2.2vw, 2.25rem);
+}
+.col { border-top: 2px solid var(--ink); padding-top: clamp(0.45rem, 1.2vh, 0.9rem); }
+.col .tag {
+    font-family: var(--font-mono);
+    font-size: var(--small-size);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    display: block;
+    margin-bottom: 0.45em;
+}
+.col h3 {
+    font-size: clamp(0.9rem, 1.6vw, 1.25rem);
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    margin-bottom: 0.4em;
+}
+.col ul { list-style: none; display: flex; flex-direction: column; gap: 0.3em; }
+.col li {
+    font-size: var(--body-size);
+    line-height: 1.4;
+    color: var(--ink-soft);
+    padding-left: 0.8em;
+    position: relative;
+}
+.col li::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0.62em;
+    width: 4px; height: 1px;
+    background: var(--accent);
+}
+
+.figures {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr));
+    gap: clamp(0.5rem, 1.8vw, 1.75rem);
+    border-top: 1px solid var(--rule);
+    padding-top: clamp(0.45rem, 1.2vh, 0.9rem);
+}
+.fig .v {
+    font-size: var(--num-size);
+    font-weight: 600;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    display: block;
+}
+.fig .l {
+    font-family: var(--font-mono);
+    font-size: var(--small-size);
+    color: var(--ink-soft);
+    line-height: 1.3;
+    display: block;
+    margin-top: 0.35em;
+}
+
+/* --------------------------------------------------------------------------
+   动画：瑞士风格 = 精确而克制
+   -------------------------------------------------------------------------- */
+.reveal {
+    opacity: 0;
+    transform: translateY(14px);
+    transition: opacity 0.5s var(--ease), transform 0.5s var(--ease);
+}
+.slide.visible .reveal { opacity: 1; transform: none; }
+.slide.visible .reveal:nth-child(1) { transition-delay: 0.05s; }
+.slide.visible .reveal:nth-child(2) { transition-delay: 0.14s; }
+.slide.visible .reveal:nth-child(3) { transition-delay: 0.23s; }
+.slide.visible .reveal:nth-child(4) { transition-delay: 0.32s; }
+
+.nav-dots {
+    position: fixed;
+    right: clamp(0.5rem, 1.4vw, 1.5rem);
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    z-index: 50;
+}
+.nav-dots button {
+    width: 9px; height: 9px;
+    border: 1px solid var(--ink);
+    border-radius: 0;           /* 方点 —— 瑞士风格里没有圆角 */
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+    transition: background 0.25s var(--ease);
+}
+.nav-dots button[aria-current='true'] { background: var(--accent); border-color: var(--accent); }
+
+/* --------------------------------------------------------------------------
+   视口断点：越矮压得越紧，图先缩，文字后缩
+   -------------------------------------------------------------------------- */
+@media (max-height: 760px) {
+    :root { --title-size: clamp(1.5rem, 4.4vw, 3rem); --content-gap: clamp(0.5rem, 1.5vh, 1.1rem); }
+    .shot { max-height: min(44vh, 360px); }
+    .hero-figs .shot { max-height: min(48vh, 400px); }
+    .step-fig .shot { max-height: min(42vh, 350px); }
+}
+@media (max-height: 620px) {
+    :root {
+        --slide-padding: clamp(0.7rem, 2.5vw, 1.6rem);
+        --title-size: clamp(1.25rem, 3.6vw, 2.1rem);
+        --body-size: clamp(0.7rem, 1vw, 0.88rem);
+        --num-size: clamp(1.2rem, 2.6vw, 1.9rem);
+    }
+    .shot, .hero-figs .shot, .step-fig .shot { max-height: min(36vh, 260px); }
+    .nav-dots { display: none; }
+    .step-cap .d, .lead { display: none; }
+}
+@media (max-height: 500px) {
+    :root { --title-size: clamp(1.05rem, 3vw, 1.6rem); --small-size: 0.56rem; }
+    .slide-foot { display: none; }
+    .hero-figs img + img { display: none; }   /* 极矮时只留一张图 */
+}
+@media (max-width: 780px) {
+    .hero { grid-template-columns: 1fr; }
+    .hero-figs { justify-content: flex-start; }
+    .steps { grid-template-columns: 1fr; }
+    .steps .step-fig:nth-child(n + 2) { display: none; }  /* 窄屏只留第一张，避免堆叠溢出 */
+    .slide-head .hide-sm { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.2s !important; }
+    html { scroll-behavior: auto; }
+}
+@media print {
+    html { scroll-snap-type: none; }
+    .slide { page-break-after: always; }
+    .nav-dots { display: none; }
+    .reveal { opacity: 1 !important; transform: none !important; }
+}
+</style>
+</head>
+<body>
+
+<nav class="nav-dots" aria-label="Slide navigation"></nav>
+
+<!-- ═══════════════════════════════════════════════════════ 01 ═══ -->
+<section class="slide" id="s1">
+    <header class="slide-head">
+        <span class="idx">01 / 03</span>
+        <span>Expenses</span>
+        <span class="spacer"></span>
+        <span class="hide-sm">What we built</span>
+    </header>
+
+    <div class="slide-content">
+        <div class="hero">
+            <div>
+                <h1 class="reveal">Snap a receipt.<br><em>Get your ledger.</em></h1>
+                <p class="lead reveal" style="margin-top: 0.8em">
+                    A mobile expense tracker. Photograph a receipt and GPT-4o reads the merchant,
+                    date, total and every line item. You check it, it's saved — with the original
+                    photo attached. Typing one in by hand takes four taps.
+                </p>
+            </div>
+            <div class="hero-figs reveal">
+                <img class="shot" src="assets/scan.png"
+                     alt="Scan confirmation screen showing a photographed receipt, the extracted total of $24.47, and the category picker">
+                <img class="shot" src="assets/add.png"
+                     alt="Home screen with the add-expense sheet open, offering Scan receipt or Enter manually">
+            </div>
+        </div>
+    </div>
+
+    <footer class="slide-foot">
+        <span>React · FastAPI · Supabase · GPT-4o</span>
+        <span>↓ scroll</span>
+    </footer>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════ 02 ═══ -->
+<section class="slide" id="s2">
+    <header class="slide-head">
+        <span class="idx">02 / 03</span>
+        <span>The product</span>
+        <span class="spacer"></span>
+        <span class="hide-sm">Photo → ledger → advice</span>
+    </header>
+
+    <div class="slide-content">
+        <h1 class="reveal">Then it tells you<br><em>something useful.</em></h1>
+
+        <div class="steps reveal">
+            <figure class="step-fig">
+                <img class="shot" src="assets/donut.png"
+                     alt="Category breakdown donut chart with a legend listing each category, amount and share">
+                <figcaption class="step-cap">
+                    <span class="k">01 — Understand</span>
+                    <span class="t">Where it actually goes</span>
+                    <span class="d">Monthly totals, category shares and a six-month trend.
+                        Mixed currencies are never summed.</span>
+                </figcaption>
+            </figure>
+
+            <figure class="step-fig">
+                <img class="shot" src="assets/insights.png"
+                     alt="Insights screen showing spending total and advice cards about overspending and category surges">
+                <figcaption class="step-cap">
+                    <span class="k">02 — Act</span>
+                    <span class="t">What to look at</span>
+                    <span class="d">Run-rate, category surges, fixed costs. Every claim carries the
+                        numbers behind it.</span>
+                </figcaption>
+            </figure>
+        </div>
+    </div>
+
+    <footer class="slide-foot">
+        <span>Advice comes from deterministic rules — the model reads receipts, it never does the arithmetic</span>
+        <span>02</span>
+    </footer>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════ 03 ═══ -->
+<section class="slide" id="s3">
+    <header class="slide-head">
+        <span class="idx">03 / 03</span>
+        <span>Tech stack</span>
+        <span class="spacer"></span>
+        <span class="hide-sm">MCP · Cloud DB · Claude Code</span>
+    </header>
+
+    <div class="slide-content">
+        <h1 class="reveal">Three moving parts.<br><em>One of them is an agent.</em></h1>
+
+        <div class="stack reveal">
+            <div class="col">
+                <span class="tag">Frontend</span>
+                <h3>React · Vite · Tailwind</h3>
+                <ul>
+                    <li>Talks to Supabase directly for CRUD</li>
+                    <li>Compresses photos before upload</li>
+                    <li>Charts drawn in CSS, no chart library</li>
+                </ul>
+            </div>
+            <div class="col">
+                <span class="tag">Backend &amp; data</span>
+                <h3>FastAPI · Postgres · GPT-4o</h3>
+                <ul>
+                    <li>One job: turn a photo into strict JSON</li>
+                    <li>Row-level security, private image bucket</li>
+                    <li>Signed URLs minted on demand</li>
+                </ul>
+            </div>
+            <div class="col">
+                <span class="tag">Built with</span>
+                <h3>Claude Code + Supabase MCP</h3>
+                <ul>
+                    <li>Agent read and migrated the live schema</li>
+                    <li>Ran real receipts through the real API</li>
+                    <li>Diffed prompt edits for regressions</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="figures reveal">
+            <div class="fig"><span class="v">33/33</span><span class="l">receipts read<br>175 line items</span></div>
+            <div class="fig"><span class="v">35/35</span><span class="l">fields correct<br>vs answer key</span></div>
+            <div class="fig"><span class="v">61</span><span class="l">assertions<br>on pure logic</span></div>
+            <div class="fig"><span class="v">2s</span><span class="l">median<br>per receipt</span></div>
+        </div>
+    </div>
+
+    <footer class="slide-foot">
+        <span>Accuracy sample: 5 receipts, US restaurants only — generalisation untested</span>
+        <span>03</span>
+    </footer>
+</section>
+
+<script>
+/* ===========================================================================
+   幻灯片控制器
+   IntersectionObserver 触发进入动画；键盘 / 触摸 / 方点三种翻页
+   =========================================================================== */
+class SlidePresentation {
+    constructor() {
+        this.slides = [...document.querySelectorAll('.slide')];
+        this.current = 0;
+        this.buildDots();
+        this.observe();
+        this.bindKeys();
+        this.bindTouch();
+    }
+
+    buildDots() {
+        const nav = document.querySelector('.nav-dots');
+        this.dots = this.slides.map((_, i) => {
+            const b = document.createElement('button');
+            b.setAttribute('aria-label', `Go to slide ${i + 1}`);
+            b.addEventListener('click', () => this.go(i));
+            nav.append(b);
+            return b;
+        });
+    }
+
+    /* threshold 0.35 而不是 0.5：翻到一半动画就该起来，等过半再触发会显得迟钝 */
+    observe() {
+        const io = new IntersectionObserver((entries) => {
+            for (const e of entries) {
+                if (!e.isIntersecting) continue;
+                e.target.classList.add('visible');
+                this.setCurrent(this.slides.indexOf(e.target));
+            }
+        }, { threshold: 0.35 });
+        this.slides.forEach((s) => io.observe(s));
+    }
+
+    setCurrent(i) {
+        if (i < 0 || i === this.current) return;
+        this.current = i;
+        this.dots.forEach((d, j) => d.setAttribute('aria-current', String(j === i)));
+    }
+
+    go(i) {
+        this.slides[Math.max(0, Math.min(i, this.slides.length - 1))]
+            ?.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    bindKeys() {
+        addEventListener('keydown', (e) => {
+            if (['ArrowRight', 'ArrowDown', ' ', 'PageDown'].includes(e.key)) {
+                e.preventDefault(); this.go(this.current + 1);
+            } else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) {
+                e.preventDefault(); this.go(this.current - 1);
+            } else if (e.key === 'Home') { e.preventDefault(); this.go(0); }
+            else if (e.key === 'End') { e.preventDefault(); this.go(this.slides.length - 1); }
+        });
+    }
+
+    /* 50px 阈值 —— 再低会把轻微手抖当成翻页 */
+    bindTouch() {
+        let y0 = null;
+        addEventListener('touchstart', (e) => { y0 = e.touches[0].clientY; }, { passive: true });
+        addEventListener('touchend', (e) => {
+            if (y0 === null) return;
+            const dy = y0 - e.changedTouches[0].clientY;
+            if (Math.abs(dy) > 50) this.go(this.current + (dy > 0 ? 1 : -1));
+            y0 = null;
+        }, { passive: true });
+    }
+}
+
+new SlidePresentation();
+</script>
+</body>
+</html>
